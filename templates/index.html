@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>外贸单据 RPA</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         margin: 0; background: #f4f6f9; color: #222; }
+  header { background: #305496; color: #fff; padding: 18px 28px; }
+  header h1 { margin: 0; font-size: 20px; }
+  header p { margin: 4px 0 0; font-size: 13px; opacity: .85; }
+  .wrap { max-width: 1080px; margin: 22px auto; padding: 0 16px;
+          display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .card { background: #fff; border-radius: 10px; padding: 20px;
+          box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+  .card h2 { margin: 0 0 4px; font-size: 16px; }
+  .card .hint { color: #888; font-size: 12px; margin: 0 0 14px; }
+  .drop { border: 2px dashed #b9c4d6; border-radius: 10px; padding: 26px;
+          text-align: center; color: #7a8aa3; cursor: pointer; transition: .15s;
+          background: #fafbfd; }
+  .drop.over { border-color: #305496; background: #eef3fb; color: #305496; }
+  .drop b { color: #305496; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin-top: 14px; }
+  .fld { display: flex; flex-direction: column; }
+  .fld.full { grid-column: 1 / -1; }
+  .fld label { font-size: 12px; color: #555; margin-bottom: 3px; }
+  .fld input, .fld textarea { padding: 7px 9px; border: 1px solid #d4d9e2;
+          border-radius: 6px; font-size: 13px; font-family: inherit; }
+  .fld textarea { resize: vertical; min-height: 46px; }
+  button { background: #305496; color: #fff; border: 0; border-radius: 7px;
+           padding: 10px 20px; font-size: 14px; cursor: pointer; margin-top: 14px; }
+  button:hover { background: #25406f; }
+  button.sec { background: #6c7a93; }
+  .filelist { list-style: none; padding: 0; margin: 12px 0 0; }
+  .filelist li { display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+          background: #f4f6f9; border-radius: 6px; margin-bottom: 6px; font-size: 13px; }
+  .filelist li .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .filelist li button { margin: 0; padding: 2px 8px; font-size: 12px; background: #b9c4d6; }
+  .msg { font-size: 13px; margin-top: 12px; padding: 9px 12px; border-radius: 6px; display: none; }
+  .msg.ok { background: #e6f6ec; color: #1d7a3e; display: block; }
+  .msg.err { background: #fdecec; color: #c0392b; display: block; }
+  .msg.info { background: #eef3fb; color: #305496; display: block; }
+  .links a { display: inline-block; margin-right: 14px; font-size: 13px; }
+  .docpick { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 14px; padding: 10px 12px;
+          background: #f4f6f9; border-radius: 7px; font-size: 13px; }
+  .docpick label { display: flex; align-items: center; gap: 5px; cursor: pointer; color: #333; }
+  .docpick input { width: 15px; height: 15px; }
+  iframe { width: 100%; height: 480px; border: 1px solid #ddd; border-radius: 8px; margin-top: 12px; }
+  .preview-text { white-space: pre-wrap; background: #f7f7f7; border: 1px solid #eee;
+          border-radius: 6px; padding: 10px; font-size: 11px; max-height: 150px;
+          overflow: auto; margin-top: 10px; color: #555; display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>外贸单据 RPA</h1>
+  <p>拖文件进来 → 自动识别 / 生成 / 合并。本地运行，文件不上传到任何服务器。</p>
+</header>
+
+<div class="wrap">
+
+  <!-- ============ 左：生成 PI/CI/PL ============ -->
+  <div class="card">
+    <h2>① 生成发票（PI / CI / PL）</h2>
+    <p class="hint">把客户 PO 拖进来 → 自动预填下面的表单 → 核对修改 → 生成。也可不传 PO，直接手填。</p>
+
+    <div class="drop" id="poDrop">
+      把 <b>PO（PDF）</b> 拖到这里，或点击选择<br>
+      <small>扫描件读不出文字，需手填</small>
+    </div>
+    <input type="file" id="poInput" accept=".pdf" hidden>
+    <div class="preview-text" id="poPreview"></div>
+
+    <div class="grid2" id="form">
+      {% for f in fields %}
+      <div class="fld {{ 'full' if f in ['买方名称及地址','通知方','品名及HS编码'] else '' }}">
+        <label>{{ f }}</label>
+        {% if f in ['买方名称及地址','通知方','品名及HS编码'] %}
+          <textarea data-k="{{ f }}"></textarea>
+        {% else %}
+          <input type="text" data-k="{{ f }}">
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="docpick" id="docPick">
+      <label><input type="checkbox" class="docchk" value="PI" checked> PI 形式发票</label>
+      <label><input type="checkbox" class="docchk" value="CI" checked> CI 商业发票</label>
+      <label><input type="checkbox" class="docchk" value="PL" checked> PL 装箱单</label>
+    </div>
+    <button id="genBtn">生成所选单据</button>
+    <div class="msg" id="genMsg"></div>
+    <div class="links" id="genLinks"></div>
+    <iframe id="genFrame" style="display:none"></iframe>
+  </div>
+
+  <!-- ============ 右：合并清关包 ============ -->
+  <div class="card">
+    <h2>② 合并清关资料包</h2>
+    <p class="hint">把提单 / 保险单 / COA / 产地证等拖进来（可多选），调好顺序，合并成一个 PDF。</p>
+
+    <div class="drop" id="mgDrop">
+      把 <b>多个文件</b> 拖到这里，或点击选择<br>
+      <small>支持 PDF / Excel / Word / 图片(jpg,png)</small>
+    </div>
+    <input type="file" id="mgInput" accept=".pdf,.xlsx,.xls,.docx,.doc,.jpg,.jpeg,.png,.bmp,.tif,.tiff,.webp" multiple hidden>
+    <ul class="filelist" id="mgList"></ul>
+
+    <div class="fld" style="margin-top:10px">
+      <label>合并后文件名</label>
+      <input type="text" id="mgName" value="清关资料">
+    </div>
+
+    <button id="mgBtn">合并成清关 PDF</button>
+    <div class="msg" id="mgMsg"></div>
+    <div class="links" id="mgLinks"></div>
+    <iframe id="mgFrame" style="display:none"></iframe>
+  </div>
+
+  <!-- ============ 危化品文档 ============ -->
+  <div class="card" style="grid-column: 1 / -1;">
+    <h2>③ 危化品文档（符合性声明 / 责任声明 / 厂检单）</h2>
+    <p class="hint">可把 <b>性能单 / 分类鉴定报告</b> 拖进下框自动提取部分字段（草稿，务必核对）；也可直接手填。选好包装类型 → 核对修改 → 生成 符合性声明 + 责任声明 + 对应厂检单。</p>
+
+    <div class="drop" id="chemDrop">
+      把 <b>性能单 / 鉴定报告</b> 拖到这里，或点击选择（可多选）<br>
+      <small>性能单→性能单号/UN标记；鉴定报告(扫描件走OCR)→报告编号/UN编号</small>
+    </div>
+    <input type="file" id="chemInput" accept=".pdf,.jpg,.jpeg,.png" multiple hidden>
+    <div class="preview-text" id="chemPreview"></div>
+
+    <div class="docpick" id="pkgPick" style="margin-top:14px;">
+      <b style="color:#305496;">包装类型：</b>
+      {% for pk in chem_pkg.keys() %}
+      <label><input type="radio" name="pkg" value="{{ pk }}" {{ 'checked' if pk == pkg_default else '' }}> {{ pk }}</label>
+      {% endfor %}
+    </div>
+
+    <p class="hint" style="margin:14px 0 4px;">通用字段（声明 + 厂检单共用）</p>
+    <div class="grid2" id="chemForm" style="grid-template-columns: repeat(3, 1fr);">
+      {% for k, v in chem_fields.items() %}
+      <div class="fld {{ 'full' if k in ['品名全称','UN标记'] else '' }}">
+        <label>{{ k }}</label>
+        {% if k == '品名全称' %}
+          <textarea data-c="{{ k }}">{{ v }}</textarea>
+        {% else %}
+          <input type="text" data-c="{{ k }}" value="{{ v }}">
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+
+    <p class="hint" style="margin:14px 0 4px;">厂检单字段（随包装类型预填，可改）</p>
+    <div class="grid2" id="chemPkgForm" style="grid-template-columns: repeat(3, 1fr);">
+      {% for k, v in chem_pkg[pkg_default].items() %}
+      <div class="fld {{ 'full' if k in ['检验依据','吨桶包装标记'] else '' }}">
+        <label>{{ k }}</label>
+        {% if k in ['检验依据','吨桶包装标记'] %}
+          <textarea data-p="{{ k }}">{{ v }}</textarea>
+        {% else %}
+          <input type="text" data-p="{{ k }}" value="{{ v }}">
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+
+    <button id="chemBtn">生成危化品单据</button>
+    <div class="msg" id="chemMsg"></div>
+    <div class="links" id="chemLinks"></div>
+  </div>
+
+</div>
+
+<script>
+// ---------- 工具 ----------
+function showMsg(el, text, type){ el.className = "msg " + type; el.textContent = text; }
+function previewGen(encName){
+  const fr = document.getElementById("genFrame");
+  fr.style.display = "block";
+  fr.src = "/preview/" + encName;
+  fr.scrollIntoView({behavior:"smooth", block:"nearest"});
+}
+function setupDrop(dropEl, inputEl, onFiles){
+  dropEl.addEventListener("click", ()=> inputEl.click());
+  inputEl.addEventListener("change", ()=> onFiles([...inputEl.files]));
+  ["dragenter","dragover"].forEach(e=> dropEl.addEventListener(e, ev=>{
+    ev.preventDefault(); dropEl.classList.add("over"); }));
+  ["dragleave","drop"].forEach(e=> dropEl.addEventListener(e, ev=>{
+    ev.preventDefault(); dropEl.classList.remove("over"); }));
+  dropEl.addEventListener("drop", ev=> onFiles([...ev.dataTransfer.files]));
+}
+
+// ---------- ① PO 识别 + 生成 ----------
+const poPreview = document.getElementById("poPreview");
+setupDrop(document.getElementById("poDrop"), document.getElementById("poInput"), async (files)=>{
+  if(!files.length) return;
+  const fd = new FormData(); fd.append("file", files[0]);
+  showMsg(genMsg, "识别中…", "info");
+  const r = await fetch("/api/extract", {method:"POST", body:fd});
+  const d = await r.json();
+  if(!d.ok){ showMsg(genMsg, d.msg, "err"); return; }
+  // 填表
+  for(const [k,v] of Object.entries(d.fields)){
+    const el = document.querySelector(`[data-k="${k}"]`);
+    if(el) el.value = v;
+  }
+  if(d.preview){ poPreview.style.display="block"; poPreview.textContent = (d.ocr?"PO 原文（OCR识别，供核对）：\n":"PO 原文（供核对）：\n")+d.preview; }
+  let msg, cls;
+  if(d.scanned){ msg="⚠️ 这是扫描件，OCR 也读不出文字，请手动填写表单。"; cls="err"; }
+  else if(d.ocr){ msg="🔍 扫描件已用 OCR 识别并预填（数量已按“吨×1000”换算成公斤、单价÷1000）。OCR 可能有个别误差，请逐项核对，尤其品名/单价/数量，再点生成。"; cls="info"; }
+  else { msg="✅ 已自动预填，请核对修改（尤其品名/单价/数量），再点生成。"; cls="ok"; }
+  showMsg(genMsg, msg, cls);
+});
+
+const genMsg = document.getElementById("genMsg");
+document.getElementById("genBtn").addEventListener("click", async ()=>{
+  const order = {};
+  document.querySelectorAll("#form [data-k]").forEach(el=> order[el.dataset.k] = el.value.trim());
+  const which = [...document.querySelectorAll(".docchk:checked")].map(c=> c.value);
+  if(!which.length){ showMsg(genMsg, "请至少勾选一种单据（PI / CI / PL）", "err"); return; }
+  order.which = which;
+  showMsg(genMsg, "生成中…", "info");
+  const r = await fetch("/api/generate", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(order)});
+  const d = await r.json();
+  if(!d.ok){ showMsg(genMsg, d.msg, "err"); return; }
+  showMsg(genMsg, "✅ 已生成 "+d.results.length+" 个单据！", "ok");
+  const links = document.getElementById("genLinks");
+  links.innerHTML = d.results.map(x=>
+    `<span style="margin-right:18px"><b>${x.label}</b> `
+    + `<a href="/download/${encodeURIComponent(x.xlsx)}">⬇Excel</a>`
+    + (x.pdf ? ` <a href="/download/${encodeURIComponent(x.pdf)}">⬇PDF</a>`
+             + ` <a href="#" onclick="previewGen('${encodeURIComponent(x.pdf)}');return false">👁预览</a>` : "")
+    + `</span>`).join("");
+  // 默认预览第一个有 PDF 的单据，其余点“👁预览”切换
+  const firstPdf = d.results.find(x=> x.pdf);
+  if(firstPdf) previewGen(encodeURIComponent(firstPdf.pdf));
+  else document.getElementById("genFrame").style.display="none";
+});
+
+// ---------- ② 合并 ----------
+let mgFiles = [];
+const mgList = document.getElementById("mgList");
+function renderList(){
+  mgList.innerHTML = "";
+  mgFiles.forEach((f,i)=>{
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="nm">${i+1}. ${f.name}</span>`;
+    const up = document.createElement("button"); up.textContent="↑"; up.onclick=()=>{ if(i>0){ [mgFiles[i-1],mgFiles[i]]=[mgFiles[i],mgFiles[i-1]]; renderList(); } };
+    const dn = document.createElement("button"); dn.textContent="↓"; dn.onclick=()=>{ if(i<mgFiles.length-1){ [mgFiles[i+1],mgFiles[i]]=[mgFiles[i],mgFiles[i+1]]; renderList(); } };
+    const rm = document.createElement("button"); rm.textContent="✕"; rm.onclick=()=>{ mgFiles.splice(i,1); renderList(); };
+    li.append(up,dn,rm); mgList.appendChild(li);
+  });
+}
+setupDrop(document.getElementById("mgDrop"), document.getElementById("mgInput"), (files)=>{
+  mgFiles.push(...files); renderList();
+});
+const mgMsg = document.getElementById("mgMsg");
+document.getElementById("mgBtn").addEventListener("click", async ()=>{
+  if(!mgFiles.length){ showMsg(mgMsg, "请先拖入文件", "err"); return; }
+  const fd = new FormData();
+  mgFiles.forEach(f=> fd.append("files", f));
+  fd.append("name", document.getElementById("mgName").value || "清关资料");
+  showMsg(mgMsg, "合并中…", "info");
+  const r = await fetch("/api/merge", {method:"POST", body:fd});
+  const d = await r.json();
+  if(!d.ok){ showMsg(mgMsg, d.msg, "err"); return; }
+  const skip = (d.skipped && d.skipped.length) ? `（跳过无法合并的：${d.skipped.join("、")}）` : "";
+  showMsg(mgMsg, "✅ 合并完成！"+skip, skip ? "info" : "ok");
+  document.getElementById("mgLinks").innerHTML = `<a href="/download/${encodeURIComponent(d.pdf)}">⬇ 下载清关 PDF</a>`;
+  const fr=document.getElementById("mgFrame"); fr.style.display="block"; fr.src="/preview/"+encodeURIComponent(d.pdf);
+});
+
+// ---------- ③ 危化品文档 ----------
+const chemMsg = document.getElementById("chemMsg");
+const chemPreview = document.getElementById("chemPreview");
+// 各包装类型的厂检单默认值（切换包装时回填）
+const PKG_DEFAULTS = {{ chem_pkg | tojson }};
+
+function fillField(key, val){
+  const el = document.querySelector(`[data-c="${key}"]`) || document.querySelector(`[data-p="${key}"]`);
+  if(el && val) el.value = val;
+}
+function curPkg(){ return (document.querySelector('input[name="pkg"]:checked')||{}).value || "200kg"; }
+
+// 切换包装类型 → 回填厂检单字段
+document.querySelectorAll('input[name="pkg"]').forEach(rb=> rb.addEventListener("change", ()=>{
+  const def = PKG_DEFAULTS[curPkg()] || {};
+  document.querySelectorAll("#chemPkgForm [data-p]").forEach(el=>{
+    if(def[el.dataset.p] !== undefined) el.value = def[el.dataset.p];
+  });
+}));
+
+// 拖入 性能单/鉴定报告 → 自动提取
+setupDrop(document.getElementById("chemDrop"), document.getElementById("chemInput"), async (files)=>{
+  if(!files.length) return;
+  const fd = new FormData(); files.forEach(f=> fd.append("files", f));
+  showMsg(chemMsg, "识别中…（鉴定报告扫描件首次OCR约15秒）", "info");
+  const r = await fetch("/api/chem_extract", {method:"POST", body:fd});
+  const d = await r.json();
+  if(!d.ok){ showMsg(chemMsg, d.msg, "err"); return; }
+  const keys = Object.keys(d.fields);
+  keys.forEach(k=> fillField(k, d.fields[k]));
+  if(d.preview){ chemPreview.style.display="block"; chemPreview.textContent = "源文件原文（供核对）：\n"+d.preview; }
+  showMsg(chemMsg, keys.length
+    ? "🔍 已提取并预填："+keys.join("、")+"。请务必逐项核对（OCR 可能有误），其余字段手填。"
+    : "⚠️ 没能自动提取到字段，请手动填写。", keys.length ? "info" : "err");
+});
+
+document.getElementById("chemBtn").addEventListener("click", async ()=>{
+  const data = { "包装类型": curPkg() };
+  document.querySelectorAll("#chemForm [data-c]").forEach(el=> data[el.dataset.c] = el.value.trim());
+  document.querySelectorAll("#chemPkgForm [data-p]").forEach(el=> data[el.dataset.p] = el.value.trim());
+  showMsg(chemMsg, "生成中…", "info");
+  const r = await fetch("/api/chem", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(data)});
+  const d = await r.json();
+  if(!d.ok){ showMsg(chemMsg, d.msg, "err"); return; }
+  showMsg(chemMsg, "✅ 已生成 "+d.results.length+" 个文档（"+curPkg()+"）！", "ok");
+  const links = document.getElementById("chemLinks");
+  links.innerHTML = d.results.map(x=> x.error
+    ? `<span style="color:#c0392b">${x.label}: ${x.error}</span>`
+    : `<span style="margin-right:18px"><b>${x.label}</b> `
+      + `<a href="/download/${encodeURIComponent(x.docx)}">⬇Word</a>`
+      + (x.pdf ? ` <a href="/download/${encodeURIComponent(x.pdf)}">⬇PDF</a>` : "")
+      + `</span>`).join("");
+});
+</script>
+</body>
+</html>
