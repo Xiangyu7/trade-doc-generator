@@ -1,0 +1,8 @@
+Flask
+openpyxl
+pillow
+pypdf
+python-docx
+PyMuPDF
+rapidocr_onnxruntime
+waitress

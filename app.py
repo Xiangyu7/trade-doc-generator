@@ -14,10 +14,10 @@ from flask import Flask, request, jsonify, send_from_directory, render_template
 import core
 
 BASE = Path(__file__).resolve().parent
-UPLOADS = BASE / "uploads"
-OUTDIR = BASE / "输出单据"
-UPLOADS.mkdir(exist_ok=True)
-OUTDIR.mkdir(exist_ok=True)
+UPLOADS = core.APP_DATA_DIR / "uploads"
+OUTDIR = core.OUTDIR
+UPLOADS.mkdir(parents=True, exist_ok=True)
+OUTDIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100MB
@@ -147,4 +147,9 @@ if __name__ == "__main__":
     if not os.environ.get("NO_BROWSER"):
         threading.Timer(1.2, _open_browser).start()
     print(f"启动中… 浏览器会自动打开 http://127.0.0.1:{PORT}  （按 Ctrl+C 停止）")
-    app.run(host="127.0.0.1", port=PORT, debug=False)
+    try:
+        from waitress import serve
+    except Exception:
+        app.run(host="127.0.0.1", port=PORT, debug=False)
+    else:
+        serve(app, host="127.0.0.1", port=PORT)

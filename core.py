@@ -5,8 +5,11 @@
   - merge_pdfs       : 把多个文件合并成一个清关 PDF
   - extract_po       : 尽量从 PO 里读出字段，预填表单（草稿，需人工核对）
 """
+import os
 import re
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import openpyxl
@@ -14,10 +17,63 @@ import pypdf
 from docx import Document
 from PIL import Image
 
+APP_NAME = "TradeDocGenerator"
 BASE = Path(__file__).resolve().parent
-TEMPLATE = BASE.parent / "CPH模板.xlsx"
-OUTDIR = BASE / "输出单据"
-SOFFICE = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+RESOURCE_BASE = Path(getattr(sys, "_MEIPASS", BASE))
+RESOURCE_DIR = RESOURCE_BASE / "resources"
+TEMPLATE_DIR = RESOURCE_DIR / "templates"
+APP_DATA_DIR = Path(os.environ.get(
+    "TRADE_DOC_DATA_DIR",
+    Path(os.environ.get("LOCALAPPDATA", BASE)) / APP_NAME,
+))
+OUTDIR = APP_DATA_DIR / "输出单据"
+
+
+def _resource_file(name: str) -> Path:
+    candidates = [
+        TEMPLATE_DIR / name,
+        RESOURCE_DIR / name,
+        BASE / name,
+        BASE.parent / name,
+    ]
+    return next((p for p in candidates if p.exists()), candidates[0])
+
+
+TEMPLATE = _resource_file("CPH模板.xlsx")
+
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+SUBPROCESS_KW = {"creationflags": CREATE_NO_WINDOW} if os.name == "nt" else {}
+
+
+def _first_existing(paths):
+    for p in paths:
+        if p and Path(p).exists():
+            return str(Path(p))
+    return None
+
+
+def _find_soffice() -> str | None:
+    env_path = os.environ.get("SOFFICE_PATH") or os.environ.get("LIBREOFFICE_PATH")
+    candidates = [
+        env_path,
+        RESOURCE_DIR / "LibreOfficePortable" / "App" / "libreoffice" / "program" / "soffice.exe",
+        RESOURCE_DIR / "libreoffice" / "program" / "soffice.exe",
+        BASE / "LibreOfficePortable" / "App" / "libreoffice" / "program" / "soffice.exe",
+        BASE / "libreoffice" / "program" / "soffice.exe",
+        Path(sys.executable).resolve().parent / "libreoffice" / "program" / "soffice.exe",
+        Path(r"C:\Program Files\LibreOffice\program\soffice.exe"),
+        Path(r"C:\Program Files (x86)\LibreOffice\program\soffice.exe"),
+        Path("/Applications/LibreOffice.app/Contents/MacOS/soffice"),
+        Path("/usr/bin/libreoffice"),
+        Path("/usr/local/bin/libreoffice"),
+        Path("/opt/homebrew/bin/libreoffice"),
+        shutil.which("soffice"),
+        shutil.which("libreoffice"),
+    ]
+    return _first_existing(candidates)
+
+
+SOFFICE = _find_soffice()
 
 # 订单字段 -> 形式发票主表单元格（CI/PL 自动联动）
 FIELD_MAP = {
@@ -75,7 +131,7 @@ def _set_print(ws):
 def office_to_pdf(path: Path, outdir: Path) -> Path | None:
     """用 LibreOffice 把 xlsx/docx 等转成 pdf。"""
     path = Path(path)
-    if not Path(SOFFICE).exists():
+    if not SOFFICE:
         return None
     suffix = path.suffix.lower()
     flag = "--calc" if suffix in (".xlsx", ".xls") else (
@@ -85,7 +141,7 @@ def office_to_pdf(path: Path, outdir: Path) -> Path | None:
         cmd.append(flag)
     cmd += ["--convert-to", "pdf", "--outdir", str(outdir), str(path)]
     try:
-        subprocess.run(cmd, check=True, capture_output=True, timeout=120)
+        subprocess.run(cmd, check=True, capture_output=True, timeout=120, **SUBPROCESS_KW)
         pdf = Path(outdir) / (path.stem + ".pdf")
         return pdf if pdf.exists() else None
     except Exception:
@@ -210,53 +266,72 @@ def _pdf_text(path: Path) -> str:
         return ""
 
 
-# ---- OCR：扫描件 PDF / 图片 用 macOS 自带 Vision 识别 ----
-OCR_SRC = BASE / "ocr_helper.swift"
-OCR_BIN = BASE / "ocr_helper"
-SWIFTC = next((p for p in ("/usr/bin/swiftc", "/usr/local/bin/swiftc") if Path(p).exists()), "swiftc")
-PDFTOPPM = next((p for p in ("/usr/local/bin/pdftoppm", "/opt/homebrew/bin/pdftoppm",
-                             "/usr/bin/pdftoppm") if Path(p).exists()), "pdftoppm")
-
-
-def _ensure_ocr_bin():
-    """确保 OCR 二进制存在；首次调用时用 swiftc 编译（约 15 秒，仅一次）。"""
-    if OCR_BIN.exists():
-        return OCR_BIN
-    if not OCR_SRC.exists():
-        return None
+# ---- OCR：扫描件 PDF / 图片。优先 RapidOCR，PDF 转图片用 PyMuPDF。----
+def _pdf_to_images(path: Path, tmpdir: Path, dpi: int = 200) -> list[Path]:
     try:
-        subprocess.run([SWIFTC, "-O", str(OCR_SRC), "-o", str(OCR_BIN)],
-                       check=True, capture_output=True, timeout=300)
-        return OCR_BIN if OCR_BIN.exists() else None
+        import fitz
     except Exception:
-        return None
+        return []
+    zoom = dpi / 72
+    matrix = fitz.Matrix(zoom, zoom)
+    images = []
+    try:
+        doc = fitz.open(str(path))
+        for idx, page in enumerate(doc, 1):
+            pix = page.get_pixmap(matrix=matrix, alpha=False)
+            out = tmpdir / f"p{idx:03d}.png"
+            pix.save(str(out))
+            images.append(out)
+    except Exception:
+        return []
+    return images
+
+
+def _rapidocr_image_text(img_path: Path) -> str:
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+    except Exception:
+        try:
+            from rapidocr import RapidOCR
+        except Exception:
+            return ""
+    try:
+        engine = _rapidocr_image_text._engine
+    except AttributeError:
+        try:
+            engine = RapidOCR()
+        except Exception:
+            return ""
+        _rapidocr_image_text._engine = engine
+    try:
+        result = engine(str(img_path))
+    except Exception:
+        return ""
+    rows = result[0] if isinstance(result, tuple) else result
+    texts = []
+    for row in rows or []:
+        if isinstance(row, (list, tuple)) and len(row) >= 2:
+            texts.append(str(row[1]))
+    return "\n".join(texts)
 
 
 def _ocr_text(path: Path) -> str:
     """对扫描件 PDF 或图片做 OCR，返回识别出的文字。任何环节失败都返回 ''。"""
     path = Path(path)
-    binp = _ensure_ocr_bin()
-    if not binp:
-        return ""
     suffix = path.suffix.lower()
-    import tempfile, shutil
+    import tempfile
     tmpdir = None
     try:
         if suffix == ".pdf":
-            tmpdir = tempfile.mkdtemp(prefix="po_ocr_")
-            subprocess.run([PDFTOPPM, "-png", "-r", "200", str(path),
-                            str(Path(tmpdir) / "p")],
-                           check=True, capture_output=True, timeout=180)
-            imgs = sorted(Path(tmpdir).glob("p*.png"))
+            tmpdir = Path(tempfile.mkdtemp(prefix="po_ocr_"))
+            imgs = _pdf_to_images(path, tmpdir)
         elif suffix in IMAGE_EXT:
             imgs = [path]
         else:
             return ""
         if not imgs:
             return ""
-        res = subprocess.run([str(binp), *[str(i) for i in imgs]],
-                             capture_output=True, timeout=240, text=True)
-        return res.stdout or ""
+        return "\n".join(filter(None, (_rapidocr_image_text(i) for i in imgs)))
     except Exception:
         return ""
     finally:
@@ -616,7 +691,7 @@ def generate_chem_docs(data: dict, packaging: str = "200kg", outdir: Path = OUTD
 
     results = []
     for label, tpl in docs:
-        src = BASE.parent / tpl
+        src = _resource_file(tpl)
         if not src.exists():
             results.append({"label": label, "error": f"找不到模板 {tpl}"})
             continue
